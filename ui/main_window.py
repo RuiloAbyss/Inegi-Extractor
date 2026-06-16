@@ -1,215 +1,262 @@
 # ui/main_window.py
-
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 import re
-from core.file_manager import load_inegi_data, open_file_in_system
+from core.file_manager import load_inegi_data, open_file_in_system, extract_source_year
 from processors.location_manager import clean_geographic_data, extract_states_dict, get_state_and_municipalities
 from processors.working_age_calculator import calculate_population_differences
+from processors.economic_calculator import analyze_economic_hierarchy, extract_economic_municipalities, extract_economic_years
 
 class MainWindow:
     def __init__(self, root):
         self.root = root
-        self.filepath = None       
-        self.df = None             
-        self.df_clean = None       
-        self.states_dict = {}      
+        
+        self.filepath_pop = None
+        self.df_pop = None
+        
+        self.filepath_econ = None
+        self.df_econ = None
+        self.df_econ_cache = None 
+        
         self.setup_ui()
         
     def setup_ui(self):
-        frame = tk.Frame(self.root, padx=20, pady=20)
-        frame.pack(fill=tk.BOTH, expand=True)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        self.btn_load = tk.Button(frame, text="Load File (Cargar)", command=self.load_file)
-        self.btn_load.grid(row=0, column=0, pady=5, sticky="w")
+        self.tab_pop = tk.Frame(self.notebook, padx=15, pady=15)
+        self.notebook.add(self.tab_pop, text="Análisis de Población")
+        self.setup_population_tab()
         
-        self.lbl_file = tk.Label(frame, text="Ningún archivo cargado.")
-        self.lbl_file.grid(row=0, column=1, pady=5, padx=10, sticky="w")
-        
-        self.btn_preview = tk.Button(frame, text="Preview File (Previsualizar)", state=tk.DISABLED, command=self.preview_file)
-        self.btn_preview.grid(row=0, column=2, padx=10, pady=5, sticky="w")
-        
-        tk.Label(frame, text="Select State (Estado):").grid(row=1, column=0, pady=5, sticky="w")
-        self.cb_state = ttk.Combobox(frame, state="readonly", width=40)
-        self.cb_state.grid(row=1, column=1, columnspan=2, pady=5, sticky="w")
-        
-        tk.Label(frame, text="Min Age Group:").grid(row=2, column=0, pady=5, sticky="w")
-        self.cb_min_age = ttk.Combobox(frame, state="readonly", width=30)
-        self.cb_min_age.grid(row=2, column=1, columnspan=2, pady=5, sticky="w")
-        
-        tk.Label(frame, text="Max Age Group:").grid(row=3, column=0, pady=5, sticky="w")
-        self.cb_max_age = ttk.Combobox(frame, state="readonly", width=30)
-        self.cb_max_age.grid(row=3, column=1, columnspan=2, pady=5, sticky="w")
-        
-        self.btn_process = tk.Button(frame, text="Process Data (Procesar)", state=tk.DISABLED, command=self.process_data)
-        self.btn_process.grid(row=4, column=0, columnspan=3, pady=15)
-        
-        self.lbl_total_entidad = tk.Label(frame, text="Población total de la entidad: -", font=("Arial", 10, "bold"))
-        self.lbl_total_entidad.grid(row=5, column=0, columnspan=3, pady=2, sticky="w")
-        
-        self.lbl_total_filtro = tk.Label(frame, text="Población total dentro del filtro de edad: -", font=("Arial", 10, "bold"))
-        self.lbl_total_filtro.grid(row=6, column=0, columnspan=3, pady=2, sticky="w")
-        
-        self.tree = ttk.Treeview(frame)
-        self.tree.grid(row=7, column=0, columnspan=3, sticky="nsew")
-        
-        frame.rowconfigure(7, weight=1)
-        frame.columnconfigure(1, weight=1)
-        
-        scrollbar_y = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scrollbar_y.set)
-        scrollbar_y.grid(row=7, column=3, sticky='ns')
-        
-        scrollbar_x = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(xscroll=scrollbar_x.set)
-        scrollbar_x.grid(row=8, column=0, columnspan=3, sticky='ew')
-        
-    def load_file(self):
-        filepath = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx *.xls")])
-        if not filepath:
-            return
-            
-        try:
-            self.filepath = filepath
-            self.lbl_file.config(text=filepath.split('/')[-1])
-            self.btn_preview.config(state=tk.NORMAL)
-            
-            self.df = load_inegi_data(self.filepath)
-            self.df_clean = clean_geographic_data(self.df)
-            
-            clean_cols = {}
-            for col in self.df_clean.columns:
-                clean_cols[col] = re.sub(r'^De\s+', '', str(col).strip(), flags=re.IGNORECASE)
-            self.df_clean.rename(columns=clean_cols, inplace=True)
-            
-            self.states_dict = extract_states_dict(self.df_clean)
-            state_options = [f"{code} - {name}" for code, name in self.states_dict.items()]
-            self.cb_state['values'] = state_options
-            if state_options:
-                self.cb_state.set(state_options[0])
-            
-            cols = list(self.df_clean.columns)
-            age_columns = []
-            
-            for col in cols:
-                if re.search(r'años|\d+\s+a\s+\d+', str(col), re.IGNORECASE):
-                    age_columns.append(col)
-                    
-            if not age_columns:
-                messagebox.showwarning("Aviso", "No se detectaron columnas de edad con el formato esperado.")
-                return
-                
-            self.cb_min_age['values'] = age_columns
-            self.cb_max_age['values'] = age_columns
-            
-            if '15 a 19 años' in age_columns:
-                self.cb_min_age.set('15 a 19 años')
-            else:
-                self.cb_min_age.set(age_columns[0])
-                
-            if '60 a 64 años' in age_columns:
-                self.cb_max_age.set('60 a 64 años')
-            else:
-                self.cb_max_age.set(age_columns[-1])
-                
-            self.btn_process.config(state=tk.NORMAL)
-            
-        except Exception as e:
-            messagebox.showerror("Error al cargar", f"Ocurrió un problema procesando el archivo:\n{str(e)}")
-            
-    def preview_file(self):
-        if self.filepath:
-            open_file_in_system(self.filepath)
-            
-    def process_data(self):
-        selected_state_str = self.cb_state.get()
-        min_age = self.cb_min_age.get()
-        max_age = self.cb_max_age.get()
-        
-        if not selected_state_str or not min_age or not max_age:
-            messagebox.showwarning("Warning", "Asegúrate de seleccionar el Estado y los rangos de edad.")
-            return
-            
-        try:
-            state_code = selected_state_str.split(" - ")[0]
-            state_name = selected_state_str.split(" - ")[1].upper()
-            
-            cols = list(self.df_clean.columns)
-            start_idx = cols.index(min_age)
-            end_idx = cols.index(max_age)
-            
-            if start_idx > end_idx:
-                messagebox.showerror("Error", "La edad mínima no puede ser mayor que la edad máxima.")
-                return
-                
-            age_cols = cols[start_idx : end_idx + 1]
-            state_data, mun_data = get_state_and_municipalities(self.df_clean, state_code)
-            
-            if state_data.empty:
-                messagebox.showerror("Error", "No se encontraron registros para el estado seleccionado.")
-                return
+        self.tab_econ = tk.Frame(self.notebook, padx=15, pady=15)
+        self.notebook.add(self.tab_econ, text="Censos Económicos")
+        self.setup_economic_tab()
 
-            raw_total_state = str(state_data['Total'].values[0]).replace(',', '')
-            total_entidad = pd.to_numeric(raw_total_state, errors='coerce') or 0
+    def setup_population_tab(self):
+        file_frame = tk.LabelFrame(self.tab_pop, text=" Matriz de Población ", padx=10, pady=5)
+        file_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=5)
+        
+        self.btn_load_pop = tk.Button(file_frame, text="Cargar Archivo de Población", command=self.load_population_file)
+        self.btn_load_pop.grid(row=0, column=0, pady=5)
+        self.lbl_file_pop = tk.Label(file_frame, text="Ningún archivo cargado.", font=("Arial", 9, "italic"))
+        self.lbl_file_pop.grid(row=0, column=1, padx=10)
+        self.btn_preview_pop = tk.Button(file_frame, text="Previsualizar", state=tk.DISABLED, command=lambda: open_file_in_system(self.filepath_pop))
+        self.btn_preview_pop.grid(row=0, column=2)
+
+        filter_frame = tk.Frame(self.tab_pop)
+        filter_frame.grid(row=1, column=0, columnspan=3, pady=10, sticky="w")
+        
+        # Etiqueta de Año leída del documento (sin desplegable)
+        self.lbl_year_pop = tk.Label(filter_frame, text="Año de la matriz: -", font=("Arial", 9, "bold"), fg="blue")
+        self.lbl_year_pop.grid(row=0, column=0, padx=10)
+        
+        tk.Label(filter_frame, text="Estado:").grid(row=0, column=1, padx=5)
+        self.cb_state = ttk.Combobox(filter_frame, state="readonly", width=35)
+        self.cb_state.grid(row=0, column=2, padx=5)
+        
+        tk.Label(filter_frame, text="Rango:").grid(row=0, column=3, padx=5)
+        self.cb_min_age = ttk.Combobox(filter_frame, state="readonly", width=12)
+        self.cb_min_age.grid(row=0, column=4, padx=2)
+        tk.Label(filter_frame, text="a").grid(row=0, column=5)
+        self.cb_max_age = ttk.Combobox(filter_frame, state="readonly", width=12)
+        self.cb_max_age.grid(row=0, column=6, padx=2)
+        
+        self.btn_process_pop = tk.Button(self.tab_pop, text="Procesar Datos", state=tk.DISABLED, command=self.process_population)
+        self.btn_process_pop.grid(row=2, column=0, columnspan=3, pady=5)
+        
+        self.lbl_total_entidad = tk.Label(self.tab_pop, text="Población total de la entidad: -", font=("Arial", 9, "bold"))
+        self.lbl_total_entidad.grid(row=3, column=0, columnspan=3, pady=2, sticky="w")
+        self.lbl_total_filtro = tk.Label(self.tab_pop, text="Población total dentro del filtro: -", font=("Arial", 9, "bold"))
+        self.lbl_total_filtro.grid(row=4, column=0, columnspan=3, pady=2, sticky="w")
+        
+        self.tree_pop = ttk.Treeview(self.tab_pop)
+        self.tree_pop.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        self.configure_scrollbars(self.tab_pop, self.tree_pop, row=5)
+
+    def setup_economic_tab(self):
+        file_frame = tk.LabelFrame(self.tab_econ, text=" Matriz de Censos Económicos ", padx=10, pady=5)
+        file_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=5)
+        
+        self.btn_load_econ = tk.Button(file_frame, text="Cargar Archivo Económico", command=self.load_economic_file)
+        self.btn_load_econ.grid(row=0, column=0, pady=5)
+        self.lbl_file_econ = tk.Label(file_frame, text="Ningún archivo cargado.", font=("Arial", 9, "italic"))
+        self.lbl_file_econ.grid(row=0, column=1, padx=10)
+        self.btn_preview_econ = tk.Button(file_frame, text="Previsualizar", state=tk.DISABLED, command=lambda: open_file_in_system(self.filepath_econ))
+        self.btn_preview_econ.grid(row=0, column=2)
+
+        filter_frame = tk.Frame(self.tab_econ)
+        filter_frame.grid(row=1, column=0, columnspan=3, pady=10, sticky="w")
+        
+        # Desplegables alimentados directamente de la matriz
+        tk.Label(filter_frame, text="Año:").grid(row=0, column=0, padx=5)
+        self.cb_year_econ = ttk.Combobox(filter_frame, state="readonly", width=8)
+        self.cb_year_econ.grid(row=0, column=1, padx=5)
+        
+        tk.Label(filter_frame, text="Municipio:").grid(row=0, column=2, padx=5)
+        self.cb_mun_econ = ttk.Combobox(filter_frame, state="readonly", width=30)
+        self.cb_mun_econ.grid(row=0, column=3, padx=5)
+        
+        # Filtro de clave con evento de tecleo en tiempo real
+        tk.Label(filter_frame, text="Filtro de Jerarquía (Realtime):").grid(row=0, column=4, padx=5)
+        self.txt_act_code = tk.Entry(filter_frame, width=15)
+        self.txt_act_code.grid(row=0, column=5, padx=5)
+        self.txt_act_code.bind("<KeyRelease>", self.filter_economic_realtime)
+        
+        self.btn_process_econ = tk.Button(self.tab_econ, text="Extraer y Estructurar", state=tk.DISABLED, command=self.process_economic)
+        self.btn_process_econ.grid(row=2, column=0, columnspan=3, pady=5)
+        
+        self.tree_econ = ttk.Treeview(self.tab_econ)
+        self.tree_econ.grid(row=3, column=0, columnspan=3, sticky="nsew")
+        self.configure_scrollbars(self.tab_econ, self.tree_econ, row=3)
+
+    def configure_scrollbars(self, parent, tree, row):
+        parent.rowconfigure(row, weight=1)
+        parent.columnconfigure(1, weight=1)
+        scy = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscroll=scy.set)
+        scy.grid(row=row, column=3, sticky='ns')
+        scx = ttk.Scrollbar(parent, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(xscroll=scx.set)
+        scx.grid(row=row+1, column=0, columnspan=3, sticky='ew')
+
+    # --- FLUJOS DE CARGA ---
+    def load_population_file(self):
+        filepath = filedialog.askopenfilename(filetypes=[("Archivos", "*.csv *.xlsx *.xls")])
+        if not filepath: return
+        try:
+            self.filepath_pop = filepath
+            self.lbl_file_pop.config(text=filepath.split('/')[-1])
             
-            total_filtro = 0
-            for col in age_cols:
-                raw_val = str(state_data[col].values[0]).replace(',', '')
-                total_filtro += pd.to_numeric(raw_val, errors='coerce') or 0
-                
+            # Obtiene el año de forma orgánica y actualiza la etiqueta
+            detected_year = extract_source_year(filepath)
+            self.lbl_year_pop.config(text=f"Año de la matriz: {detected_year}")
+            
+            self.df_pop = load_inegi_data(self.filepath_pop)
+            self.df_clean_pop = clean_geographic_data(self.df_pop)
+            
+            clean_cols = {c: re.sub(r'^De\s+', '', str(c).strip(), flags=re.IGNORECASE) for c in self.df_clean_pop.columns}
+            self.df_clean_pop.rename(columns=clean_cols, inplace=True)
+            
+            states = extract_states_dict(self.df_clean_pop)
+            self.cb_state['values'] = [f"{k} - {v}" for k, v in states.items()]
+            if states: self.cb_state.set(self.cb_state['values'][0])
+            
+            age_cols = [c for c in self.df_clean_pop.columns if re.search(r'años|\d+\s+a\s+\d+', str(c), re.IGNORECASE)]
+            self.cb_min_age['values'] = age_cols
+            self.cb_max_age['values'] = age_cols
+            if '15 a 19 años' in age_cols: self.cb_min_age.set('15 a 19 años')
+            if '60 a 64 años' in age_cols: self.cb_max_age.set('60 a 64 años')
+            
+            self.btn_preview_pop.config(state=tk.NORMAL)
+            self.btn_process_pop.config(state=tk.NORMAL)
+        except Exception as e:
+            messagebox.showerror("Error", f"Fallo al cargar:\n{str(e)}")
+
+    def load_economic_file(self):
+        filepath = filedialog.askopenfilename(filetypes=[("Archivos", "*.csv *.xlsx *.xls")])
+        if not filepath: return
+        try:
+            self.filepath_econ = filepath
+            self.lbl_file_econ.config(text=filepath.split('/')[-1])
+            
+            self.df_econ = load_inegi_data(self.filepath_econ)
+            
+            years = extract_economic_years(self.df_econ)
+            if years:
+                self.cb_year_econ['values'] = years
+                self.cb_year_econ.set(years[0])
+            
+            municipalities = extract_economic_municipalities(self.df_econ)
+            mun_options = ["TODOS"] + [f"{k} - {v}" for k, v in municipalities.items()]
+            self.cb_mun_econ['values'] = mun_options
+            self.cb_mun_econ.set(mun_options[0])
+            
+            self.btn_preview_econ.config(state=tk.NORMAL)
+            self.btn_process_econ.config(state=tk.NORMAL)
+        except Exception as e:
+            messagebox.showerror("Error", f"Fallo al cargar:\n{str(e)}")
+
+    # --- FLUJOS DE PROCESAMIENTO ---
+    def process_population(self):
+        try:
+            state_str = self.cb_state.get()
+            min_age, max_age = self.cb_min_age.get(), self.cb_max_age.get()
+            state_code = state_str.split(" - ")[0]
+            
+            cols = list(self.df_clean_pop.columns)
+            age_cols = cols[cols.index(min_age):cols.index(max_age)+1]
+            state_data, mun_data = get_state_and_municipalities(self.df_clean_pop, state_code)
+            
+            total_entidad = pd.to_numeric(str(state_data['Total'].values[0]).replace(',', ''), errors='coerce') or 0
+            total_filtro = sum(pd.to_numeric(str(state_data[col].values[0]).replace(',', ''), errors='coerce') or 0 for col in age_cols)
+            
             self.lbl_total_entidad.config(text=f"Población total de la entidad: {total_entidad:,.0f}")
-            self.lbl_total_filtro.config(text=f"Población total dentro del filtro de edad: {total_filtro:,.0f}")
+            self.lbl_total_filtro.config(text=f"Población total dentro del filtro: {total_filtro:,.0f}")
             
             if mun_data.empty:
-                messagebox.showinfo("Aviso", f"{state_name} no tiene desglosado los municipios.")
+                messagebox.showinfo("Aviso", "Estado sin municipios desglosados.")
                 return
                 
-            result_df = calculate_population_differences(state_data, mun_data, age_cols)
-            self.display_results(result_df)
-            
+            res_df = calculate_population_differences(state_data, mun_data, age_cols)
+            self.render_tree(self.tree_pop, res_df, is_pop=True)
         except Exception as e:
-            messagebox.showerror("Error", f"Error en el procesamiento:\n{str(e)}")
+            messagebox.showerror("Error", str(e))
+
+    def process_economic(self):
+        try:
+            mun_str = self.cb_mun_econ.get()
+            target_mun = None if "TODOS" in mun_str else mun_str.split(" - ")[0]
+            target_year = self.cb_year_econ.get()
             
-    def display_results(self, df):
-        self.tree.delete(*self.tree.get_children())
-        self.tree["columns"] = list(df.columns)
-        self.tree["show"] = "headings"
+            # Limpiar caja de texto realtime al procesar un nuevo set
+            self.txt_act_code.delete(0, tk.END)
+            
+            self.df_econ_cache = analyze_economic_hierarchy(self.df_econ, target_mun, target_year)
+            
+            if self.df_econ_cache.empty:
+                messagebox.showwarning("Aviso", "No hay datos para este corte.")
+                self.tree_econ.delete(*self.tree_econ.get_children())
+                return
+                
+            self.render_tree(self.tree_econ, self.df_econ_cache, is_pop=False)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def filter_economic_realtime(self, event):
+        """Actualiza la tabla al instante comparando el texto con la jerarquía Clave."""
+        if self.df_econ_cache is None or self.df_econ_cache.empty:
+            return
+            
+        search = self.txt_act_code.get().strip()
+        if search == "":
+            self.render_tree(self.tree_econ, self.df_econ_cache, is_pop=False)
+        else:
+            filtered = self.df_econ_cache[self.df_econ_cache['Clave'].astype(str).str.startswith(search)]
+            self.render_tree(self.tree_econ, filtered, is_pop=False)
+
+    def render_tree(self, tree, df, is_pop):
+        tree.delete(*tree.get_children())
+        if df.empty: return
         
-        # CALIBRACIÓN DE ANCHOS DE COLUMNA EXACTOS
+        tree["columns"] = list(df.columns)
+        tree["show"] = "headings"
+        
         for col in df.columns:
             max_len = len(str(col))
-            
             for item in df[col]:
-                if isinstance(item, (int, float)):
-                    item_str = f"{item:,.0f}"
-                else:
-                    item_str = str(item)
-                if len(item_str) > max_len:
-                    max_len = len(item_str)
+                item_str = f"{item:,.0f}" if isinstance(item, (int, float)) else str(item)
+                if len(item_str) > max_len: max_len = len(item_str)
             
-            # Ajustes milimétricos según el tipo de columna solicitado
-            if col == 'Municipio':
-                # "Apenas un poco más que su municipio con el nombre más largo"
-                col_width = (max_len * 8) + 12  
-            elif col == 'Cód. Mpio':
-                # Ajustado adecuadamente al tamaño de la cifra del código
-                col_width = (max_len * 9) + 10  
-            elif " a " in str(col) or "años" in str(col).lower():
-                # "Casi nada de espacio horizontal extra" -> Súper compacto
-                col_width = (max_len * 7) + 4   
+            if is_pop:
+                w = (max_len * 8) + 12 if col == 'Municipio' else ((max_len * 9) + 10 if col == 'Cód. Mpio' else ((max_len * 7) + 4 if " a " in str(col) or "años" in str(col).lower() else (max_len * 7.5) + 6))
             else:
-                # Para la "Cantidad de personas en rango" (Usa un ancho ceñido al texto de cabecera)
-                col_width = (max_len * 7.5) + 6 
+                # Ajuste ceñido para la tabla económica
+                w = (max_len * 7.5) + 6 if 'Actividad' in str(col) else ((max_len * 8) + 8 if 'Ubicación' in str(col) else (max_len * 7.5) + 4)
+                
+            tree.heading(col, text=col)
+            tree.column(col, width=int(w), minwidth=int(w), stretch=tk.NO, anchor="center")
             
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=int(col_width), minwidth=int(col_width), stretch=tk.NO, anchor="center")
-            
-        for index, row in df.iterrows():
-            formatted_values = []
-            for item in list(row):
-                if isinstance(item, (int, float)):
-                    formatted_values.append(f"{item:,.0f}")
-                else:
-                    formatted_values.append(item)
-            self.tree.insert("", "end", values=formatted_values)
+        for _, row in df.iterrows():
+            vals = [f"{item:,.0f}" if isinstance(item, (int, float)) else item for item in list(row)]
+            tree.insert("", "end", values=vals)
