@@ -2,6 +2,7 @@
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import pandas as pd
 from core.file_manager import load_inegi_data, open_file_in_system
 from processors.location_manager import clean_geographic_data, extract_states_dict, get_state_and_municipalities
 from processors.working_age_calculator import calculate_population_differences
@@ -10,17 +11,14 @@ class MainWindow:
     """
     Clase principal de la interfaz gráfica (UI) para la aplicación INEGI Data Extractor.
     
-    Se encarga de la gestión de la ventana, la disposición de los componentes visuales 
-    (Tkinter/TTK), la captura de eventos del usuario y la interacción directa con los 
-    módulos de procesamiento geográfico y matemático.
+    Se encarga de la gestión de la ventana, la disposición de los componentes visuales,
+    la captura de eventos del usuario y la interacción directa con los módulos de 
+    procesamiento geográfico y matemático.
     """
 
     def __init__(self, root):
         """
         Inicializa la ventana principal y define el estado inicial de las variables de datos.
-        
-        Parámetros:
-        - root (tk.Tk): Instancia de la ventana raíz de Tkinter.
         """
         self.root = root
         self.filepath = None       # Ruta absoluta del archivo cargado (.csv o .xlsx)
@@ -34,11 +32,6 @@ class MainWindow:
     def setup_ui(self):
         """
         Construye y organiza todos los elementos widgets en la ventana.
-        
-        Dispone los botones de carga y previsualización, los menús desplegables 
-        (Combobox) para la selección jerárquica del Estado y los rangos de edad, 
-        así como la tabla de visualización de datos (Treeview) con sus respectivas 
-        barras de desplazamiento.
         """
         # Contenedor principal con márgenes internos
         frame = tk.Frame(self.root, padx=20, pady=20)
@@ -70,23 +63,30 @@ class MainWindow:
         
         # Botón de ejecución del procesamiento matemático
         self.btn_process = tk.Button(frame, text="Process Data (Procesar)", state=tk.DISABLED, command=self.process_data)
-        self.btn_process.grid(row=4, column=0, columnspan=3, pady=20)
+        self.btn_process.grid(row=4, column=0, columnspan=3, pady=15)
         
-        # Tabla de resultados (Treeview) configurada con barras de desplazamiento X e Y
+        # --- NUEVOS CAMPOS DE RESUMEN DE LA ENTIDAD ---
+        self.lbl_total_entidad = tk.Label(frame, text="Población total de la entidad: -", font=("Arial", 10, "bold"))
+        self.lbl_total_entidad.grid(row=5, column=0, columnspan=3, pady=2, sticky="w")
+        
+        self.lbl_total_filtro = tk.Label(frame, text="Población total dentro del filtro de edad: -", font=("Arial", 10, "bold"))
+        self.lbl_total_filtro.grid(row=6, column=0, columnspan=3, pady=2, sticky="w")
+        
+        # Tabla de resultados (Treeview) configurada con barras de desplazamiento
         self.tree = ttk.Treeview(frame)
-        self.tree.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        self.tree.grid(row=7, column=0, columnspan=3, sticky="nsew")
         
         # Configuración de expansión elástica para la tabla
-        frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(7, weight=1)
         frame.columnconfigure(1, weight=1)
         
         scrollbar_y = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scrollbar_y.set)
-        scrollbar_y.grid(row=5, column=3, sticky='ns')
+        scrollbar_y.grid(row=7, column=3, sticky='ns')
         
         scrollbar_x = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(xscroll=scrollbar_x.set)
-        scrollbar_x.grid(row=6, column=0, columnspan=3, sticky='ew')
+        scrollbar_x.grid(row=8, column=0, columnspan=3, sticky='ew')
         
     def load_file(self):
         """
@@ -103,74 +103,57 @@ class MainWindow:
             self.lbl_file.config(text=filepath.split('/')[-1])
             self.btn_preview.config(state=tk.NORMAL)
             
-            # Carga y filtrado inicial usando el ecosistema modular
+            # Carga masiva usando el ecosistema modular corregido
             self.df = load_inegi_data(self.filepath)
             self.df_clean = clean_geographic_data(self.df)
             
-            # Extracción geográfica para el ComboBox
+            # Extracción geográfica para el ComboBox de Estados
             self.states_dict = extract_states_dict(self.df_clean)
             state_options = [f"{code} - {name}" for code, name in self.states_dict.items()]
             self.cb_state['values'] = state_options
             if state_options:
                 self.cb_state.set(state_options[0])
             
-            # --- NUEVA LÓGICA ROBUSTA PARA ENCONTRAR COLUMNAS DE EDAD ---
+            # Obtención e identificación de las columnas matriciales de edad
             import re
             cols = list(self.df_clean.columns)
             age_columns = []
             
             for col in cols:
-                # Buscamos columnas que contengan la palabra "años" (ignorando mayúsculas)
-                # o el patrón "De X a Y"
                 if re.search(r'años|de\s+\d+\s+a\s+\d+', str(col), re.IGNORECASE):
                     age_columns.append(col)
                     
             if not age_columns:
-                messagebox.showwarning("Aviso", "No se detectaron columnas de edad con el formato esperado ('De X a Y años'). Verifica el archivo.")
+                messagebox.showwarning("Aviso", "No se detectaron columnas de edad con el formato esperado.")
                 return
                 
             self.cb_min_age['values'] = age_columns
             self.cb_max_age['values'] = age_columns
             
-            # Selección inteligente por defecto
+            # Selección predeterminada inteligente
             if 'De 15 a 19 años' in age_columns:
                 self.cb_min_age.set('De 15 a 19 años')
             else:
-                self.cb_min_age.set(age_columns[0]) # Selecciona la primera si no halla la de 15
+                self.cb_min_age.set(age_columns[0])
                 
             if 'De 60 a 64 años' in age_columns:
                 self.cb_max_age.set('De 60 a 64 años')
             else:
-                self.cb_max_age.set(age_columns[-1]) # Selecciona la última si no halla la de 64
+                self.cb_max_age.set(age_columns[-1])
                 
             self.btn_process.config(state=tk.NORMAL)
             
         except Exception as e:
             messagebox.showerror("Error al cargar", f"Ocurrió un problema procesando el archivo:\n{str(e)}")
-    
+            
     def preview_file(self):
-        """
-        Invoca la herramienta externa del sistema operativo para revisar el archivo en crudo.
-        
-        Llama al procedimiento del sistema que abre el archivo actual con la aplicación 
-        predeterminada (por ejemplo, Microsoft Excel, LibreOffice Calc o el bloc de notas) 
-        sin bloquear la ejecución de la interfaz gráfica.
-        """
+        """Invoca la herramienta externa del sistema operativo para revisar el archivo en crudo."""
         if self.filepath:
             open_file_in_system(self.filepath)
             
     def process_data(self):
         """
         Orquesta el flujo de filtrado geográfico y cálculo numérico tras la orden del usuario.
-        
-        Procedimiento:
-        1. Obtiene el Estado seleccionado y extrae su clave numérica de dos dígitos.
-        2. Obtiene los límites de edad seleccionados y mapea las columnas correspondientes de la matriz.
-        3. Segmenta los datos obteniendo la fila del Estado y únicamente las de sus municipios asociados.
-        4. Si el archivo no contiene el desglose municipal para esa entidad, notifica al usuario.
-        5. Envía los segmentos al calculador matemático para procesar las poblaciones en rango, 
-           fuera de rango y ejecutar las diferencias solicitadas para la fórmula.
-        6. Envía el resultado final estructurado a la pantalla.
         """
         selected_state_str = self.cb_state.get()
         min_age = self.cb_min_age.get()
@@ -192,14 +175,35 @@ class MainWindow:
                 
             age_cols = cols[start_idx : end_idx + 1]
             
-            # Segmentación de datos mediante location_manager
+            # Segmentación de datos estructurados mediante location_manager
             state_data, mun_data = get_state_and_municipalities(self.df_clean, state_code)
             
+            if state_data.empty:
+                messagebox.showerror("Error", "No se encontraron registros para el estado seleccionado.")
+                return
+
+            # --- CÁLCULO DINÁMICO DE LOS CAMPOS SOLICITADOS (RESUMEN) ---
+            # Limpiar comas del total general estatal
+            raw_total_state = str(state_data['Total'].values[0]).replace(',', '')
+            total_entidad = pd.to_numeric(raw_total_state, errors='coerce') or 0
+            
+            # Limpiar y sumar las columnas pertenecientes al filtro seleccionado para el Estado
+            total_filtro = 0
+            for col in age_cols:
+                raw_val = str(state_data[col].values[0]).replace(',', '')
+                total_filtro += pd.to_numeric(raw_val, errors='coerce') or 0
+                
+            # Renderizar los nuevos resultados en las etiquetas de la UI
+            self.lbl_total_entidad.config(text=f"Población total de la entidad: {total_entidad:,.0f}")
+            self.lbl_total_filtro.config(text=f"Población total dentro del filtro de edad: {total_filtro:,.0f}")
+            
+            # Si el archivo carece del desglose de municipios (ej. archivo nacional resumido), avisa pero mantiene los totales
             if mun_data.empty:
-                messagebox.showinfo("Info", "El archivo actual no contiene el desglose de municipios para esta entidad.")
+                messagebox.showinfo("Info", "El archivo actual contiene los totales estatales pero no el desglose por municipio.")
+                self.tree.delete(*self.tree.get_children())
                 return
                 
-            # Procesamiento matemático core
+            # Procesamiento matemático modular para el desglose de los municipios
             result_df = calculate_population_differences(state_data, mun_data, age_cols)
             self.display_results(result_df)
             
@@ -207,26 +211,16 @@ class MainWindow:
             messagebox.showerror("Error", f"Error en el procesamiento:\n{str(e)}")
             
     def display_results(self, df):
-        """
-        Actualiza y renderiza un DataFrame de Pandas dentro de la tabla visual Treeview.
-        
-        Limpia las filas preexistentes, reconfigura dinámicamente las columnas y 
-        encabezados según la estructura de salida del procedimiento ejecutado, e 
-        inserta los nuevos registros numéricos formateados para su visualización inmediata.
-        
-        Parámetros:
-        - df (pd.DataFrame): Matriz de datos procesados con los resultados por municipio.
-        """
+        """Actualiza y renderiza un DataFrame de Pandas dentro de la tabla visual Treeview."""
         self.tree.delete(*self.tree.get_children())
         self.tree["column"] = list(df.columns)
         self.tree["show"] = "headings"
         
         for col in self.tree["column"]:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=125, anchor="center")
+            self.tree.column(col, width=130, anchor="center")
             
         for index, row in df.iterrows():
-            # Formatear números con comas para la presentación final en la UI
             formatted_values = []
             for item in list(row):
                 if isinstance(item, (int, float)):
