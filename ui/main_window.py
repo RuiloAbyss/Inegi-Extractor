@@ -11,14 +11,11 @@ from processors.economic_calculator import analyze_economic_hierarchy, extract_e
 class MainWindow:
     def __init__(self, root):
         self.root = root
-        
         self.filepath_pop = None
         self.df_pop = None
-        
         self.filepath_econ = None
         self.df_econ = None
         self.df_econ_cache = None 
-        
         self.setup_ui()
         
     def setup_ui(self):
@@ -47,7 +44,6 @@ class MainWindow:
         filter_frame = tk.Frame(self.tab_pop)
         filter_frame.grid(row=1, column=0, columnspan=3, pady=10, sticky="w")
         
-        # Etiqueta de Año leída del documento (sin desplegable)
         self.lbl_year_pop = tk.Label(filter_frame, text="Año de la matriz: -", font=("Arial", 9, "bold"), fg="blue")
         self.lbl_year_pop.grid(row=0, column=0, padx=10)
         
@@ -88,7 +84,6 @@ class MainWindow:
         filter_frame = tk.Frame(self.tab_econ)
         filter_frame.grid(row=1, column=0, columnspan=3, pady=10, sticky="w")
         
-        # Desplegables alimentados directamente de la matriz
         tk.Label(filter_frame, text="Año:").grid(row=0, column=0, padx=5)
         self.cb_year_econ = ttk.Combobox(filter_frame, state="readonly", width=8)
         self.cb_year_econ.grid(row=0, column=1, padx=5)
@@ -97,9 +92,8 @@ class MainWindow:
         self.cb_mun_econ = ttk.Combobox(filter_frame, state="readonly", width=30)
         self.cb_mun_econ.grid(row=0, column=3, padx=5)
         
-        # Filtro de clave con evento de tecleo en tiempo real
-        tk.Label(filter_frame, text="Filtro de Jerarquía (Realtime):").grid(row=0, column=4, padx=5)
-        self.txt_act_code = tk.Entry(filter_frame, width=15)
+        tk.Label(filter_frame, text="Buscar actividad económica:").grid(row=0, column=4, padx=5)
+        self.txt_act_code = tk.Entry(filter_frame, width=20)
         self.txt_act_code.grid(row=0, column=5, padx=5)
         self.txt_act_code.bind("<KeyRelease>", self.filter_economic_realtime)
         
@@ -128,7 +122,6 @@ class MainWindow:
             self.filepath_pop = filepath
             self.lbl_file_pop.config(text=filepath.split('/')[-1])
             
-            # Obtiene el año de forma orgánica y actualiza la etiqueta
             detected_year = extract_source_year(filepath)
             self.lbl_year_pop.config(text=f"Año de la matriz: {detected_year}")
             
@@ -139,8 +132,18 @@ class MainWindow:
             self.df_clean_pop.rename(columns=clean_cols, inplace=True)
             
             states = extract_states_dict(self.df_clean_pop)
-            self.cb_state['values'] = [f"{k} - {v}" for k, v in states.items()]
-            if states: self.cb_state.set(self.cb_state['values'][0])
+            state_options = []
+            
+            # Semáforo para identificar qué estados sí tienen datos municipales
+            for code, name in states.items():
+                mun_count = self.df_clean_pop[(self.df_clean_pop['Codigo'].str.len() == 5) & (self.df_clean_pop['Codigo'].str.startswith(code))].shape[0]
+                if mun_count > 0:
+                    state_options.append(f"🟢 {code} - {name}")
+                else:
+                    state_options.append(f"⚪ {code} - {name}")
+                    
+            self.cb_state['values'] = state_options
+            if state_options: self.cb_state.set(state_options[0])
             
             age_cols = [c for c in self.df_clean_pop.columns if re.search(r'años|\d+\s+a\s+\d+', str(c), re.IGNORECASE)]
             self.cb_min_age['values'] = age_cols
@@ -182,7 +185,9 @@ class MainWindow:
         try:
             state_str = self.cb_state.get()
             min_age, max_age = self.cb_min_age.get(), self.cb_max_age.get()
-            state_code = state_str.split(" - ")[0]
+            
+            clean_str = state_str.replace("🟢 ", "").replace("⚪ ", "")
+            state_code = clean_str.split(" - ")[0]
             
             cols = list(self.df_clean_pop.columns)
             age_cols = cols[cols.index(min_age):cols.index(max_age)+1]
@@ -195,7 +200,8 @@ class MainWindow:
             self.lbl_total_filtro.config(text=f"Población total dentro del filtro: {total_filtro:,.0f}")
             
             if mun_data.empty:
-                messagebox.showinfo("Aviso", "Estado sin municipios desglosados.")
+                state_name = clean_str.split(" - ")[1].upper()
+                messagebox.showinfo("Aviso", f"{state_name} no tiene desglosado los municipios.")
                 return
                 
             res_df = calculate_population_differences(state_data, mun_data, age_cols)
@@ -209,9 +215,7 @@ class MainWindow:
             target_mun = None if "TODOS" in mun_str else mun_str.split(" - ")[0]
             target_year = self.cb_year_econ.get()
             
-            # Limpiar caja de texto realtime al procesar un nuevo set
             self.txt_act_code.delete(0, tk.END)
-            
             self.df_econ_cache = analyze_economic_hierarchy(self.df_econ, target_mun, target_year)
             
             if self.df_econ_cache.empty:
@@ -224,15 +228,17 @@ class MainWindow:
             messagebox.showerror("Error", str(e))
 
     def filter_economic_realtime(self, event):
-        """Actualiza la tabla al instante comparando el texto con la jerarquía Clave."""
         if self.df_econ_cache is None or self.df_econ_cache.empty:
             return
             
-        search = self.txt_act_code.get().strip()
+        search = self.txt_act_code.get().strip().lower()
         if search == "":
             self.render_tree(self.tree_econ, self.df_econ_cache, is_pop=False)
         else:
-            filtered = self.df_econ_cache[self.df_econ_cache['Clave'].astype(str).str.startswith(search)]
+            filtered = self.df_econ_cache[
+                self.df_econ_cache['Clave Econ.'].astype(str).str.startswith(search) | 
+                self.df_econ_cache['Actividad Económica'].astype(str).str.lower().str.contains(search, regex=False, na=False)
+            ]
             self.render_tree(self.tree_econ, filtered, is_pop=False)
 
     def render_tree(self, tree, df, is_pop):
@@ -248,14 +254,16 @@ class MainWindow:
                 item_str = f"{item:,.0f}" if isinstance(item, (int, float)) else str(item)
                 if len(item_str) > max_len: max_len = len(item_str)
             
+            # Alineación de la Actividad Económica a la izquierda ('w' = West)
+            align = "w" if col == 'Actividad Económica' else "center"
+            
             if is_pop:
                 w = (max_len * 8) + 12 if col == 'Municipio' else ((max_len * 9) + 10 if col == 'Cód. Mpio' else ((max_len * 7) + 4 if " a " in str(col) or "años" in str(col).lower() else (max_len * 7.5) + 6))
             else:
-                # Ajuste ceñido para la tabla económica
-                w = (max_len * 7.5) + 6 if 'Actividad' in str(col) else ((max_len * 8) + 8 if 'Ubicación' in str(col) else (max_len * 7.5) + 4)
+                w = (max_len * 6.5) + 6 if col == 'Actividad Económica' else ((max_len * 8) + 8 if 'Ubicación' in str(col) else (max_len * 7.5) + 4)
                 
             tree.heading(col, text=col)
-            tree.column(col, width=int(w), minwidth=int(w), stretch=tk.NO, anchor="center")
+            tree.column(col, width=int(w), minwidth=int(w), stretch=tk.NO, anchor=align)
             
         for _, row in df.iterrows():
             vals = [f"{item:,.0f}" if isinstance(item, (int, float)) else item for item in list(row)]
