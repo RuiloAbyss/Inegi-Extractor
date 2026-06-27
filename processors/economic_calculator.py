@@ -18,7 +18,6 @@ def extract_economic_years(df):
     if not year_cols: return []
     
     valid_years = set()
-    # Ciclo seguro con str() para evitar el error 'float has no attribute isdigit'
     for y in df[year_cols[0]].dropna().unique():
         y_str = str(y).replace('.0', '').strip()
         if y_str.isdigit() and len(y_str) == 4:
@@ -88,27 +87,35 @@ def analyze_economic_hierarchy(df, target_municipality=None, target_year=None):
             if match_ent: geo_code, geo_name = match_ent.group(1), match_ent.group(2)
             else: geo_name = ent_val
                 
-        # Filtro de municipio seleccionado desde la interfaz
         if target_municipality:
             if not mun_val or mun_val.lower() == 'nan': continue
             if geo_code != target_municipality: continue
                 
-        # LIMPIEZA DE LA DESCRIPCIÓN Y REDUNDANCIAS (Aísla solo el texto posterior al número)
-        match_act = re.match(r'^(Sector|Subsector|Rama|Subrama)?\s*(\d+[-\d]*)\s+(.*)', act_val, re.IGNORECASE)
+        # LIMPIEZA DE LA DESCRIPCIÓN Y REDUNDANCIAS 
+        match_act = re.match(r'^(Sector|Subsector|Rama|Subrama|Clase)?\s*(\d+[-\d]*)\s+(.*)', act_val, re.IGNORECASE)
         level, act_code, clean_act_text = "Total General", "", act_val
         
         if match_act:
             prefix = match_act.group(1)
             act_code = match_act.group(2)
-            clean_act_text = match_act.group(3).strip() # Aislar descripción limpia
+            clean_act_text = match_act.group(3).strip() 
             
-            if prefix: level = prefix.capitalize()
+            if prefix: 
+                level = prefix.capitalize()
             else:
+                # Deducción por longitud de la clave
                 code_len = len(act_code.replace('-', ''))
                 if code_len <= 2: level = "Sector"
                 elif code_len == 3: level = "Subsector"
                 elif code_len == 4: level = "Rama"
-                else: level = "Subrama"
+                elif code_len == 5: level = "Subrama"
+                else: level = "Clase"  # 6 dígitos
+                
+            # --- FILTRO ANTIRREDUNDANCIAS ---
+            # Si el nivel es Clase y el último dígito de la clave es cero, omitimos este registro.
+            if level == "Clase" and act_code.endswith("0"):
+                continue
+                
         elif 'TOTAL MUNICIPAL' in act_val.upper():
             level = "Total Municipal"
             clean_act_text = "Total Municipal"
