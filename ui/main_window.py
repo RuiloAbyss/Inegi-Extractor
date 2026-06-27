@@ -12,7 +12,7 @@ class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.geometry("1200x780")
-        self.root.title("INEGI Data Processor - Optimizado (Big Data + Factory)")
+        self.root.title("INEGI Data Processor | Cluster Finder")
         
         # Matrices en bruto en memoria
         self.df_pop_raw = None
@@ -43,13 +43,11 @@ class MainWindow:
         self.btn_load = tk.Button(top_frame, text="Cargar Archivo INEGI", command=self.load_smart_file, font=("Arial", 9, "bold"), bg="#e0e0e0")
         self.btn_load.grid(row=0, column=0, rowspan=2, padx=10, pady=5, sticky="ns")
         
-        # Fila Población con Botón de Ver
         self.lbl_status_pop = tk.Label(top_frame, text="Población: ⚪ No cargado", fg="gray")
         self.lbl_status_pop.grid(row=0, column=1, sticky="w", padx=10, pady=1)
         self.btn_preview_pop = tk.Button(top_frame, text="👁 Ver Archivo", state=tk.DISABLED, command=lambda: open_file_in_system(self.filepath_pop))
         self.btn_preview_pop.grid(row=0, column=2, padx=5, pady=1)
         
-        # Fila Económico con Botón de Ver
         self.lbl_status_econ = tk.Label(top_frame, text="Económico: ⚪ No cargado", fg="gray")
         self.lbl_status_econ.grid(row=1, column=1, sticky="w", padx=10, pady=1)
         self.btn_preview_econ = tk.Button(top_frame, text="👁 Ver Archivo", state=tk.DISABLED, command=lambda: open_file_in_system(self.filepath_econ))
@@ -133,7 +131,6 @@ class MainWindow:
         
         pop_states, pop_muns, econ_states, econ_muns = {}, {}, {}, {}
         
-        # Universo de población
         if self.df_pop_raw is not None:
             self.df_clean_pop = clean_geographic_data(self.df_pop_raw)
             clean_cols = {c: re.sub(r'^De\s+', '', str(c).strip(), flags=re.IGNORECASE) for c in self.df_clean_pop.columns}
@@ -142,7 +139,6 @@ class MainWindow:
             for _, r in self.df_clean_pop[self.df_clean_pop['Codigo'].str.len() == 5].iterrows():
                 pop_muns[r['Codigo']] = str(r['Entidad_Municipio']).strip()
                 
-        # Universo económico
         if self.df_econ_raw is not None:
             econ_muns = extract_economic_municipalities(self.df_econ_raw)
             ent_cols = [c for c in self.df_econ_raw.columns if 'ENTIDAD' in str(c).upper()]
@@ -152,7 +148,6 @@ class MainWindow:
                     if match and "NOTA" not in match.group(2).upper():
                         econ_states[match.group(1)] = match.group(2).strip()
 
-        # Filtro de Intersección
         strict_mode = self.chk_intersection_var.get()
         if strict_mode and self.df_pop_raw is not None and self.df_econ_raw is not None:
             for code in pop_states:
@@ -169,7 +164,6 @@ class MainWindow:
                 m_count = self.df_clean_pop[(self.df_clean_pop['Codigo'].str.len() == 5) & (self.df_clean_pop['Codigo'].str.startswith(code))].shape[0] if self.df_pop_raw is not None else 1
                 self.intersected_states[code] = f"🟢 {name}" if m_count > 0 else f"⚪ {name}"
                 
-            # Mapeo Inteligente: Si no hay población, anclamos el municipio económico a su estado base
             if pop_muns:
                 self.intersected_muns = pop_muns
             elif econ_muns:
@@ -260,10 +254,19 @@ class MainWindow:
         self.cb_year_econ = ttk.Combobox(filter_frame, state="readonly", width=8)
         self.cb_year_econ.pack(side=tk.LEFT, padx=5)
         
-        tk.Label(filter_frame, text="Buscar actividad económica:").pack(side=tk.LEFT, padx=25)
-        self.txt_act_code = tk.Entry(filter_frame, width=22)
+        tk.Label(filter_frame, text="Buscar:").pack(side=tk.LEFT, padx=15)
+        self.txt_act_code = tk.Entry(filter_frame, width=20)
         self.txt_act_code.pack(side=tk.LEFT, padx=5)
         self.txt_act_code.bind("<KeyRelease>", self.filter_economic_realtime)
+        
+        # NUEVO CONTROL: Selector de Límite de Filas
+        tk.Label(filter_frame, text="Mostrar filas:").pack(side=tk.LEFT, padx=15)
+        self.cb_limit_econ = ttk.Combobox(filter_frame, state="readonly", width=8)
+        self.cb_limit_econ['values'] = ["500", "1500", "5000", "10000", "Todos"]
+        self.cb_limit_econ.set("1500")
+        self.cb_limit_econ.pack(side=tk.LEFT, padx=5)
+        # Sincronizado para actualizar la tabla instantáneamente al cambiar el valor
+        self.cb_limit_econ.bind("<<ComboboxSelected>>", self.filter_economic_realtime)
         
         tree_frame = tk.Frame(self.tab_econ)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -289,7 +292,6 @@ class MainWindow:
     # PASO 3: ANÁLISIS DE INTERSECCIÓN Y DIBUJADO DE TABLAS
     # ---------------------------------------------------------
     def process_all_tabs(self):
-        """Dispara de manera sincronizada la filtración de ambas tablas."""
         if self.df_pop_raw is not None: self.process_population()
         if self.df_econ_raw is not None: self.process_economic()
 
@@ -351,7 +353,6 @@ class MainWindow:
                     valid_mun_names = [v.upper() for k, v in self.intersected_muns.items() if k.startswith(state_code)]
                     valid_mun_names.append(state_name)
                     
-                    # RED DE SEGURIDAD: Si por alguna razón el cruce falló, extraemos todo el estado del archivo
                     if len(valid_mun_names) <= 1:
                         valid_mun_names = df_full['Ubicación'].str.upper().unique().tolist()
                         
@@ -361,9 +362,6 @@ class MainWindow:
                     self.df_econ_cache = df_full[df_full['Ubicación'].str.upper().isin([mun_name, state_name])]
                     
             self.render_tree(self.tree_econ, self.df_econ_cache, is_pop=False)
-            
-            if len(self.df_econ_cache) > 1500:
-                messagebox.showinfo("Protección de Interfaz (BIG DATA)", f"El filtro produjo {len(self.df_econ_cache):,.0f} registros.\nPara mantener la velocidad de la ventana, solo se dibujarán los primeros 1,500.")
         except Exception as e:
             messagebox.showerror("Error en Censo Económico", f"Ocurrió un error estructurando los datos económicos:\n{str(e)}")
 
@@ -383,9 +381,15 @@ class MainWindow:
         tree.delete(*tree.get_children())
         if df.empty: return
         
-        # --- PROTECCIÓN BIG DATA ---
-        MAX_ROWS = 1500
-        display_df = df.head(MAX_ROWS)
+        # --- LÍMITE CONTROLADO POR EL USUARIO ---
+        display_df = df
+        if not is_pop and hasattr(self, 'cb_limit_econ') and self.cb_limit_econ.winfo_exists():
+            limite = self.cb_limit_econ.get()
+            if limite != "Todos":
+                try:
+                    display_df = df.head(int(limite))
+                except Exception:
+                    pass
         
         tree["columns"] = list(display_df.columns)
         tree["show"] = "headings"
