@@ -12,7 +12,7 @@ class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.geometry("1200x780")
-        self.root.title("INEGI Data Processor - Optimizado")
+        self.root.title("INEGI Data Processor - Optimizado (Big Data + Factory)")
         
         # Matrices en bruto en memoria
         self.df_pop_raw = None
@@ -35,7 +35,7 @@ class MainWindow:
         
     def setup_ui(self):
         # ==========================================
-        # PASO 1: CARGA DE ARCHIVOS
+        # PASO 1: CARGA DE ARCHIVOS Y PREVISUALIZACIÓN
         # ==========================================
         top_frame = tk.LabelFrame(self.root, text=" 1. Carga de Matrices de Datos ", padx=5, pady=2)
         top_frame.pack(fill=tk.X, padx=10, pady=2)
@@ -43,14 +43,20 @@ class MainWindow:
         self.btn_load = tk.Button(top_frame, text="Cargar Archivo INEGI", command=self.load_smart_file, font=("Arial", 9, "bold"), bg="#e0e0e0")
         self.btn_load.grid(row=0, column=0, rowspan=2, padx=10, pady=5, sticky="ns")
         
+        # Fila Población con Botón de Ver
         self.lbl_status_pop = tk.Label(top_frame, text="Población: ⚪ No cargado", fg="gray")
         self.lbl_status_pop.grid(row=0, column=1, sticky="w", padx=10, pady=1)
+        self.btn_preview_pop = tk.Button(top_frame, text="👁 Ver Archivo", state=tk.DISABLED, command=lambda: open_file_in_system(self.filepath_pop))
+        self.btn_preview_pop.grid(row=0, column=2, padx=5, pady=1)
         
+        # Fila Económico con Botón de Ver
         self.lbl_status_econ = tk.Label(top_frame, text="Económico: ⚪ No cargado", fg="gray")
         self.lbl_status_econ.grid(row=1, column=1, sticky="w", padx=10, pady=1)
+        self.btn_preview_econ = tk.Button(top_frame, text="👁 Ver Archivo", state=tk.DISABLED, command=lambda: open_file_in_system(self.filepath_econ))
+        self.btn_preview_econ.grid(row=1, column=2, padx=5, pady=1)
 
         # ==========================================
-        # PASO 2: PREPARACIÓN DE ENTORNO (INTERSECCIÓN)
+        # PASO 2: PREPARACIÓN DE ENTORNO
         # ==========================================
         prep_frame = tk.LabelFrame(self.root, text=" 2. Preparación de Entorno ", padx=5, pady=2)
         prep_frame.pack(fill=tk.X, padx=10, pady=2)
@@ -104,11 +110,13 @@ class MainWindow:
                 self.filepath_econ = filepath
                 self.df_econ_raw = df_temp
                 self.lbl_status_econ.config(text=f"Económico: 🟢 {name}", fg="green")
+                self.btn_preview_econ.config(state=tk.NORMAL)
                 self.econ_tab_built = False 
             else:
                 self.filepath_pop = filepath
                 self.df_pop_raw = df_temp
                 self.lbl_status_pop.config(text=f"Población: 🟢 {name}", fg="green")
+                self.btn_preview_pop.config(state=tk.NORMAL)
                 self.pop_tab_built = False
                 
             self.btn_prepare.config(state=tk.NORMAL)
@@ -123,15 +131,13 @@ class MainWindow:
         self.intersected_states.clear()
         self.intersected_muns.clear()
         
-        pop_states, pop_muns = {}, {}
-        econ_states, econ_muns = {}, {}
+        pop_states, pop_muns, econ_states, econ_muns = {}, {}, {}, {}
         
         # Universo de población
         if self.df_pop_raw is not None:
             self.df_clean_pop = clean_geographic_data(self.df_pop_raw)
             clean_cols = {c: re.sub(r'^De\s+', '', str(c).strip(), flags=re.IGNORECASE) for c in self.df_clean_pop.columns}
             self.df_clean_pop.rename(columns=clean_cols, inplace=True)
-            
             pop_states = extract_states_dict(self.df_clean_pop)
             for _, r in self.df_clean_pop[self.df_clean_pop['Codigo'].str.len() == 5].iterrows():
                 pop_muns[r['Codigo']] = str(r['Entidad_Municipio']).strip()
@@ -162,16 +168,20 @@ class MainWindow:
             for code, name in base_states.items():
                 m_count = self.df_clean_pop[(self.df_clean_pop['Codigo'].str.len() == 5) & (self.df_clean_pop['Codigo'].str.startswith(code))].shape[0] if self.df_pop_raw is not None else 1
                 self.intersected_states[code] = f"🟢 {name}" if m_count > 0 else f"⚪ {name}"
-            self.intersected_muns = pop_muns if pop_muns else {f"00{k}": v for k, v in econ_muns.items()}
+                
+            # Mapeo Inteligente: Si no hay población, anclamos el municipio económico a su estado base
+            if pop_muns:
+                self.intersected_muns = pop_muns
+            elif econ_muns:
+                st_code = list(econ_states.keys())[0] if len(econ_states) == 1 else "00"
+                self.intersected_muns = {f"{st_code}{k}": v for k, v in econ_muns.items()}
 
-        # Cargar lista de estados en el Combobox y forzar la selección inicial
         state_list = ["Toda la República Mexicana"] + [f"{k} - {v}" for k, v in self.intersected_states.items()]
         self.cb_estado['values'] = state_list
         if state_list:
             self.cb_estado.set(state_list[0])
-            self.on_state_selected(None) # Llama la función para actualizar municipios
+            self.on_state_selected(None)
             
-        # Pestañas visuales
         if self.df_pop_raw is not None and not self.pop_tab_built:
             self.build_pop_tab()
             self.notebook.add(self.tab_pop, text="Análisis Demográfico")
@@ -183,10 +193,9 @@ class MainWindow:
             self.econ_tab_built = True
             
         self.btn_process_all.config(state=tk.NORMAL)
-        messagebox.showinfo("Entorno Listo", "Entorno cargado y cruzado.\nSeleccione el Nivel (Estado/Municipio) y proceda a Analizar.")
+        messagebox.showinfo("Entorno Listo", "Entorno cargado y cruzado.\nSeleccione el Nivel Geográfico y proceda a Analizar.")
 
     def on_state_selected(self, event):
-        """Maneja los niveles del desplegable anidado en tiempo real."""
         state_sel = self.cb_estado.get()
         if "Toda la República" in state_sel:
             self.cb_municipio['values'] = ["N/A (Nivel Nacional)"]
@@ -196,7 +205,6 @@ class MainWindow:
             self.cb_municipio.config(state="readonly")
             state_code = state_sel.replace("🟢 ", "").replace("⚪ ", "").split(" - ")[0]
             muns_list = [f"{k} - {v}" for k, v in self.intersected_muns.items() if k.startswith(state_code)]
-            
             self.cb_municipio['values'] = ["Todos del Estado"] + muns_list
             self.cb_municipio.set("Todos del Estado")
 
@@ -230,7 +238,6 @@ class MainWindow:
         tree_frame.pack(fill=tk.BOTH, expand=True)
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
-        
         self.tree_pop = ttk.Treeview(tree_frame)
         self.tree_pop.grid(row=0, column=0, sticky="nsew")
         self.configure_malla_scrolls(tree_frame, self.tree_pop)
@@ -262,7 +269,6 @@ class MainWindow:
         tree_frame.pack(fill=tk.BOTH, expand=True)
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
-        
         self.tree_econ = ttk.Treeview(tree_frame)
         self.tree_econ.grid(row=0, column=0, sticky="nsew")
         self.configure_malla_scrolls(tree_frame, self.tree_econ)
@@ -283,7 +289,7 @@ class MainWindow:
     # PASO 3: ANÁLISIS DE INTERSECCIÓN Y DIBUJADO DE TABLAS
     # ---------------------------------------------------------
     def process_all_tabs(self):
-        """Ejecuta los filtros en memoria RAM y dibuja las tablas de golpe."""
+        """Dispara de manera sincronizada la filtración de ambas tablas."""
         if self.df_pop_raw is not None: self.process_population()
         if self.df_econ_raw is not None: self.process_economic()
 
@@ -291,12 +297,10 @@ class MainWindow:
         try:
             state_sel = self.cb_estado.get()
             mun_sel = self.cb_municipio.get()
-            
             min_age, max_age = self.cb_min_age.get(), self.cb_max_age.get()
             cols = list(self.df_clean_pop.columns)
             age_cols = cols[cols.index(min_age):cols.index(max_age)+1]
             
-            # FILTRADO SEGÚN DESPLEGABLES
             if "Toda la República" in state_sel:
                 valid_codes = list(self.intersected_states.keys())
                 state_data = self.df_clean_pop[self.df_clean_pop['Codigo'].isin(valid_codes)]
@@ -314,17 +318,15 @@ class MainWindow:
                     
             if state_data.empty: return
             
-            # Sumatoria a prueba de múltiples estados
             t_ent = sum(pd.to_numeric(str(x).replace(',', ''), errors='coerce') or 0 for x in state_data['Total'].values)
             t_flt = sum(pd.to_numeric(str(x).replace(',', ''), errors='coerce') or 0 for col in age_cols for x in state_data[col].values)
-            
             self.lbl_total_entidad.config(text=f"Población base (Padre): {t_ent:,.0f}")
             self.lbl_total_filtro.config(text=f"Población en rango: {t_flt:,.0f}")
             
             res_df = calculate_population_differences(state_data, mun_data, age_cols)
             self.render_tree(self.tree_pop, res_df, is_pop=True)
         except Exception as e:
-            print(f"Error en Demografía: {e}")
+            messagebox.showerror("Error en Demografía", f"Ocurrió un error procesando población:\n{str(e)}")
 
     def process_economic(self):
         try:
@@ -333,14 +335,12 @@ class MainWindow:
             target_year = self.cb_year_econ.get()
             self.txt_act_code.delete(0, tk.END)
             
-            # Extraemos la matriz completa del año para filtrar rápido sobre ella
             df_full = analyze_economic_hierarchy(self.df_econ_raw, None, target_year)
             if df_full.empty:
                 self.df_econ_cache = df_full
                 self.render_tree(self.tree_econ, self.df_econ_cache, is_pop=False)
                 return
 
-            # FILTRADO SEGÚN DESPLEGABLES
             if "Toda la República" in state_sel:
                 self.df_econ_cache = df_full
             else:
@@ -350,14 +350,22 @@ class MainWindow:
                 if "Todos del Estado" in mun_sel:
                     valid_mun_names = [v.upper() for k, v in self.intersected_muns.items() if k.startswith(state_code)]
                     valid_mun_names.append(state_name)
+                    
+                    # RED DE SEGURIDAD: Si por alguna razón el cruce falló, extraemos todo el estado del archivo
+                    if len(valid_mun_names) <= 1:
+                        valid_mun_names = df_full['Ubicación'].str.upper().unique().tolist()
+                        
                     self.df_econ_cache = df_full[df_full['Ubicación'].str.upper().isin(valid_mun_names)]
                 else:
                     mun_name = mun_sel.split(" - ")[1].strip().upper()
                     self.df_econ_cache = df_full[df_full['Ubicación'].str.upper().isin([mun_name, state_name])]
                     
             self.render_tree(self.tree_econ, self.df_econ_cache, is_pop=False)
+            
+            if len(self.df_econ_cache) > 1500:
+                messagebox.showinfo("Protección de Interfaz (BIG DATA)", f"El filtro produjo {len(self.df_econ_cache):,.0f} registros.\nPara mantener la velocidad de la ventana, solo se dibujarán los primeros 1,500.")
         except Exception as e:
-            print(f"Error Económico: {e}")
+            messagebox.showerror("Error en Censo Económico", f"Ocurrió un error estructurando los datos económicos:\n{str(e)}")
 
     def filter_economic_realtime(self, event):
         if self.df_econ_cache is None or self.df_econ_cache.empty: return
@@ -375,12 +383,16 @@ class MainWindow:
         tree.delete(*tree.get_children())
         if df.empty: return
         
-        tree["columns"] = list(df.columns)
+        # --- PROTECCIÓN BIG DATA ---
+        MAX_ROWS = 1500
+        display_df = df.head(MAX_ROWS)
+        
+        tree["columns"] = list(display_df.columns)
         tree["show"] = "headings"
         
-        for col in df.columns:
+        for col in display_df.columns:
             max_len = len(str(col))
-            for item in df[col]:
+            for item in display_df[col]:
                 item_str = f"{item:,.0f}" if isinstance(item, (int, float)) else str(item)
                 if len(item_str) > max_len: max_len = len(item_str)
             
@@ -395,6 +407,6 @@ class MainWindow:
             tree.heading(col, text=col)
             tree.column(col, width=int(w), minwidth=int(w), stretch=tk.NO, anchor=align)
             
-        for _, row in df.iterrows():
+        for _, row in display_df.iterrows():
             vals = [f"{item:,.0f}" if isinstance(item, (int, float)) else item for item in list(row)]
             tree.insert("", "end", values=vals)
