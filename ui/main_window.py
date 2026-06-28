@@ -14,7 +14,7 @@ class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.geometry("1250x800")
-        self.root.title("INEGI Data Processor - Interpolador CAGR + Clusters")
+        self.root.title("INEGI Data Processor - Análisis de Clusters y CAGR")
         
         self.dict_pop_raw = {}  
         self.dict_pop_clean = {} 
@@ -26,7 +26,9 @@ class MainWindow:
         
         self.df_econ_cache = None 
         self.df_calc_cache = None 
+        
         self.current_n_population = 0
+        self.active_pop_year = "" # Rastrea exactamente qué año de población se está usando
         
         self.intersected_states = {}
         self.intersected_muns = {}
@@ -66,7 +68,7 @@ class MainWindow:
         self.btn_prepare = tk.Button(prep_frame, text="Preparar Entorno", command=self.prepare_environment, font=("Arial", 9, "bold"), bg="#2196F3", fg="white", state=tk.DISABLED)
         self.btn_prepare.pack(side=tk.LEFT, padx=20, pady=5)
 
-        # 3. FILTRO MAESTRO
+        # 3. FILTRO MAESTRO (Geográfico)
         filter_frame = tk.LabelFrame(self.root, text=" 3. Filtro Geográfico Maestro ", padx=5, pady=2)
         filter_frame.pack(fill=tk.X, padx=10, pady=2)
         
@@ -210,6 +212,9 @@ class MainWindow:
             self.cb_municipio['values'] = ["Todos del Estado"] + muns_list
             self.cb_municipio.set("Todos del Estado")
 
+    # ---------------------------------------------------------
+    # CONSTRUCCIÓN DE INTERFACES Y SCROLL
+    # ---------------------------------------------------------
     def configure_malla_scrolls(self, parent, tree):
         scy = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=tree.yview)
         scy.grid(row=0, column=1, sticky="ns")
@@ -231,7 +236,7 @@ class MainWindow:
         self.cb_view_mode.set(modes[0])
         self.cb_view_mode.pack(side=tk.LEFT, padx=5)
         
-        tk.Label(row1_frame, text="Año a Interpolar:").pack(side=tk.LEFT, padx=15)
+        tk.Label(row1_frame, text="Año (Población):").pack(side=tk.LEFT, padx=15)
         self.cb_year_pop = ttk.Combobox(row1_frame, state="readonly", width=8)
         if self.economic_years:
             self.cb_year_pop['values'] = self.economic_years
@@ -245,6 +250,7 @@ class MainWindow:
         self.lbl_pop_nature = tk.Label(row1_frame, text="Estado: -", font=("Arial", 10, "bold"))
         self.lbl_pop_nature.pack(side=tk.RIGHT, padx=15)
         
+        # Sincronización instantánea en cascada
         self.cb_view_mode.bind("<<ComboboxSelected>>", lambda e: self.process_population())
         self.cb_year_pop.bind("<<ComboboxSelected>>", lambda e: self.process_population())
 
@@ -287,6 +293,8 @@ class MainWindow:
         tk.Label(row1_frame, text="Año Censal Económico:").pack(side=tk.LEFT, padx=5)
         self.cb_year_econ = ttk.Combobox(row1_frame, state="readonly", width=8)
         self.cb_year_econ.pack(side=tk.LEFT, padx=5)
+        # Aquí también enlazamos la sincronización en cascada
+        self.cb_year_econ.bind("<<ComboboxSelected>>", lambda e: self.process_all_tabs())
         
         tk.Label(row1_frame, text="Buscar:").pack(side=tk.LEFT, padx=10)
         self.txt_act_code = tk.Entry(row1_frame, width=22)
@@ -336,7 +344,7 @@ class MainWindow:
         ctrl_frame = tk.Frame(self.tab_calc)
         ctrl_frame.pack(fill=tk.X, pady=(0, 5))
         
-        tk.Label(ctrl_frame, text="Buscar:").pack(side=tk.LEFT, padx=5)
+        tk.Label(ctrl_frame, text="Buscar Industria/Sector:").pack(side=tk.LEFT, padx=5)
         self.txt_calc_search = tk.Entry(ctrl_frame, width=25)
         self.txt_calc_search.pack(side=tk.LEFT, padx=5)
         self.txt_calc_search.bind("<KeyRelease>", self.filter_calc_realtime)
@@ -345,9 +353,9 @@ class MainWindow:
         self.chk_clusters_only = tk.Checkbutton(ctrl_frame, text="✅ Mostrar SOLAMENTE Clusters", variable=self.chk_clusters_only_var, font=("Arial", 9, "bold"), fg="green", command=self.filter_calc_realtime)
         self.chk_clusters_only.pack(side=tk.LEFT, padx=10)
         
-        # Alerta visual de desfase de años (extrapolación)
-        self.lbl_calc_warning = tk.Label(ctrl_frame, text="", font=("Arial", 9, "italic"), fg="#e67e22")
-        self.lbl_calc_warning.pack(side=tk.LEFT, padx=5)
+        # Alerta visual dinámica
+        self.lbl_calc_warning = tk.Label(ctrl_frame, text="", font=("Arial", 9, "bold"), fg="#e67e22")
+        self.lbl_calc_warning.pack(side=tk.LEFT, padx=15)
         
         self.lbl_calc_count = tk.Label(ctrl_frame, text="Registros: 0", font=("Arial", 9, "bold"))
         self.lbl_calc_count.pack(side=tk.RIGHT, padx=15)
@@ -359,13 +367,16 @@ class MainWindow:
         self.tree_calc = ttk.Treeview(tree_frame)
         self.tree_calc.grid(row=0, column=0, sticky="nsew")
         
-        self.tree_calc.tag_configure('cluster_row', background='#d4edda') # Verde
-        self.tree_calc.tag_configure('missing_data_row', background='#fff3cd') # Amarillo
+        self.tree_calc.tag_configure('cluster_row', background='#d4edda')
+        self.tree_calc.tag_configure('missing_data_row', background='#fff3cd')
         self.configure_malla_scrolls(tree_frame, self.tree_calc)
 
+    # ---------------------------------------------------------
+    # EXTRAPOLACIÓN, FILTRADO Y RENDERIZADO
+    # ---------------------------------------------------------
     def process_all_tabs(self):
         self.current_n_population = 0
-        if self.dict_pop_clean: self.process_population()
+        if self.dict_pop_clean: self.process_population(auto_calc=False)
         if self.df_econ_raw is not None: 
             self.process_economic()
             self.process_calculations()
@@ -397,7 +408,7 @@ class MainWindow:
         res_df = calculate_population_differences(state_data, mun_data, age_cols)
         return res_df, t_flt
 
-    def process_population(self):
+    def process_population(self, auto_calc=True):
         try:
             target_year = self.cb_year_pop.get() 
             view_mode = self.cb_view_mode.get()
@@ -406,6 +417,7 @@ class MainWindow:
             if not available_years: return
             
             if "Extrapolación" in view_mode and len(available_years) >= 2:
+                self.active_pop_year = str(target_year)
                 try: t_year_int = int(target_year)
                 except ValueError: t_year_int = available_years[-1]
                     
@@ -420,7 +432,7 @@ class MainWindow:
                 t_flt_ex = extrapolate_n_value(t_flt1, t_flt2, y1, y2, target_year)
                 self.current_n_population = t_flt_ex
                 
-                self.lbl_pop_nature.config(text=f"📈 SINTÉTICO: Interés Compuesto ({y1} ➜ {y2}) Extrapolado a {target_year}", fg="#b30000")
+                self.lbl_pop_nature.config(text=f"📈 SINTÉTICO: Extrapolado a {target_year} (mediante sucesión geométrica)", fg="#b30000")
                 self.lbl_total_filtro.config(text=f"N Estimada ({target_year}): {t_flt_ex:,.0f}")
                 
                 final_df = extrapolate_population_results(df1, df2, y1, y2, target_year)
@@ -428,11 +440,19 @@ class MainWindow:
             else:
                 for yr in available_years:
                     if str(yr) in view_mode or len(available_years) == 1:
+                        self.active_pop_year = str(yr)
                         df_real, t_real = self._get_single_year_population(yr)
+                        self.current_n_population = t_real
+                        
                         self.lbl_pop_nature.config(text=f"🟢 DATOS REALES: Censo Original {yr}", fg="green")
                         self.lbl_total_filtro.config(text=f"N Real ({yr}): {t_real:,.0f}")
                         self.render_tree(self.tree_pop, df_real, type_tab='pop')
                         break
+                        
+            # Si el usuario manipuló un control de población, auto-sincronizamos los Clusters
+            if auto_calc and self.df_econ_raw is not None and self.calc_tab_built:
+                self.process_calculations()
+                
         except Exception as e:
             messagebox.showerror("Error Población", str(e))
 
@@ -469,34 +489,20 @@ class MainWindow:
     def process_calculations(self):
         try:
             if hasattr(self, 'txt_calc_search'): self.txt_calc_search.delete(0, tk.END)
-            target_econ_year = self.cb_year_econ.get()
-            available_years = sorted(list(self.dict_pop_clean.keys()))
             
-            n_final_cluster = 1.0
-            is_extrapolated = True
+            # --- EVALUACIÓN DE LA LEYENDA (Toma ambos datos de los desplegables) ---
+            pop_year = getattr(self, 'active_pop_year', "")
+            econ_year = self.cb_year_econ.get() if hasattr(self, 'cb_year_econ') and self.cb_year_econ.winfo_exists() else ""
             
-            try: target_econ_year_int = int(target_econ_year)
-            except ValueError: target_econ_year_int = 0
+            if pop_year and econ_year and pop_year != econ_year:
+                if hasattr(self, 'lbl_calc_warning'):
+                    self.lbl_calc_warning.config(text=f"⚠️ Advertencia: Población ({pop_year}) vs Economía ({econ_year}). Imprecisión temporal.")
+            else:
+                if hasattr(self, 'lbl_calc_warning'):
+                    self.lbl_calc_warning.config(text="")
             
-            # Decisión inteligente de advertencias y matemáticas
-            if target_econ_year_int in available_years:
-                is_extrapolated = False
-                _, n_final_cluster = self._get_single_year_population(target_econ_year_int)
-            elif len(available_years) == 1:
-                _, n_final_cluster = self._get_single_year_population(available_years[0])
-                is_extrapolated = True
-            elif len(available_years) >= 2:
-                closest = sorted(available_years, key=lambda y: abs(y - target_econ_year_int))
-                y1, y2 = min(closest[0], closest[1]), max(closest[0], closest[1])
-                _, t_flt1 = self._get_single_year_population(y1)
-                _, t_flt2 = self._get_single_year_population(y2)
-                n_final_cluster = extrapolate_n_value(t_flt1, t_flt2, y1, y2, target_econ_year)
-                is_extrapolated = True
-                
-            if is_extrapolated and hasattr(self, 'lbl_calc_warning'):
-                self.lbl_calc_warning.config(text="⚠️ N Extrapolada: El censo demográfico no concuerda en año con el económico.")
-            elif hasattr(self, 'lbl_calc_warning'):
-                self.lbl_calc_warning.config(text="")
+            # Usar la N que extrajo exactamente del filtro de Población actual
+            n_final_cluster = self.current_n_population if self.current_n_population > 0 else 1.0
             
             self.df_calc_cache = calculate_clusters(self.df_econ_cache, n_final_cluster)
             self.filter_calc_realtime()
