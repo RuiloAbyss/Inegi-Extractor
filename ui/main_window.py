@@ -9,6 +9,7 @@ from processors.working_age_calculator import calculate_population_differences
 from processors.economic_calculator import analyze_economic_hierarchy, extract_economic_municipalities, extract_economic_years
 from processors.cluster_calculator import calculate_clusters
 from processors.population_interpolator import extrapolate_population_results, extrapolate_n_value
+from processors.export_manager import ExportManager
 
 class MainWindow:
     def __init__(self, root):
@@ -29,6 +30,7 @@ class MainWindow:
         
         self.current_n_population = 0
         self.active_pop_year = "" 
+        self.env_prepared = False
         
         self.intersected_states = {}
         self.intersected_muns = {}
@@ -68,21 +70,24 @@ class MainWindow:
         self.btn_prepare = tk.Button(prep_frame, text="Preparar Entorno", command=self.prepare_environment, font=("Arial", 9, "bold"), bg="#2196F3", fg="white", state=tk.DISABLED)
         self.btn_prepare.pack(side=tk.LEFT, padx=20, pady=5)
 
-        # 3. FILTRO MAESTRO (Geográfico)
+        # 3. FILTRO MAESTRO Y CONTROLES DE REPORTE
         filter_frame = tk.LabelFrame(self.root, text=" 3. Filtro Geográfico Maestro ", padx=5, pady=2)
         filter_frame.pack(fill=tk.X, padx=10, pady=2)
         
         tk.Label(filter_frame, text="Estado:").pack(side=tk.LEFT, padx=5)
-        self.cb_estado = ttk.Combobox(filter_frame, state="readonly", width=30)
+        self.cb_estado = ttk.Combobox(filter_frame, state="readonly", width=25)
         self.cb_estado.pack(side=tk.LEFT, padx=5)
         self.cb_estado.bind("<<ComboboxSelected>>", self.on_state_selected)
         
-        tk.Label(filter_frame, text="Municipio:").pack(side=tk.LEFT, padx=15)
-        self.cb_municipio = ttk.Combobox(filter_frame, state="readonly", width=30)
+        tk.Label(filter_frame, text="Municipio:").pack(side=tk.LEFT, padx=10)
+        self.cb_municipio = ttk.Combobox(filter_frame, state="readonly", width=25)
         self.cb_municipio.pack(side=tk.LEFT, padx=5)
         
         self.btn_process_all = tk.Button(filter_frame, text="Analizar y Construir", command=self.process_all_tabs, font=("Arial", 10, "bold"), bg="#4CAF50", fg="white", state=tk.DISABLED)
-        self.btn_process_all.pack(side=tk.RIGHT, padx=10, pady=5)
+        self.btn_process_all.pack(side=tk.LEFT, padx=15, pady=5)
+        
+        # BOTÓN VERDE (Creado pero NO empaquetado para que inicie invisible)
+        self.btn_export = tk.Button(filter_frame, text="📥 Exportar Excel", command=self.trigger_export, font=("Arial", 9, "bold"), bg="#27ae60", fg="white")
 
         # 4. PESTAÑAS
         self.notebook = ttk.Notebook(self.root)
@@ -92,7 +97,24 @@ class MainWindow:
         self.tab_econ = tk.Frame(self.notebook, padx=10, pady=5)
         self.tab_calc = tk.Frame(self.notebook, padx=10, pady=5)
 
+    def trigger_export(self):
+        pop_year = getattr(self, 'active_pop_year', "")
+        econ_year = self.cb_year_econ.get() if hasattr(self, 'cb_year_econ') and self.cb_year_econ.winfo_exists() else ""
+        
+        ExportManager.open_export_window(
+            parent=self.root, 
+            tree_pop=self.tree_pop, 
+            tree_econ=self.tree_econ, 
+            tree_calc=self.tree_calc, 
+            pop_year=pop_year, 
+            econ_year=econ_year, 
+            env_prepared=self.env_prepared
+        )
+
     def load_smart_file(self):
+        self.env_prepared = False 
+        self.btn_export.pack_forget() # Ocultar el botón si se sube un nuevo archivo
+        
         filepath = filedialog.askopenfilename(filetypes=[("Archivos INEGI", "*.csv *.xlsx *.xls")])
         if not filepath: return
         try:
@@ -196,6 +218,7 @@ class MainWindow:
             self.notebook.add(self.tab_calc, text="Cálculos (Clusters)")
             self.calc_tab_built = True
             
+        self.env_prepared = True
         self.btn_process_all.config(state=tk.NORMAL)
         messagebox.showinfo("Entorno Listo", "Entorno geográfico configurado. Proceda a Analizar.")
 
@@ -212,9 +235,6 @@ class MainWindow:
             self.cb_municipio['values'] = ["Todos del Estado"] + muns_list
             self.cb_municipio.set("Todos del Estado")
 
-    # ---------------------------------------------------------
-    # CONSTRUCCIÓN DE INTERFACES Y SCROLL
-    # ---------------------------------------------------------
     def configure_malla_scrolls(self, parent, tree):
         scy = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=tree.yview)
         scy.grid(row=0, column=1, sticky="ns")
@@ -368,15 +388,19 @@ class MainWindow:
         self.tree_calc.tag_configure('missing_data_row', background='#fff3cd')
         self.configure_malla_scrolls(tree_frame, self.tree_calc)
 
-    # ---------------------------------------------------------
-    # EXTRAPOLACIÓN, FILTRADO Y RENDERIZADO
-    # ---------------------------------------------------------
     def process_all_tabs(self):
+        if not self.env_prepared:
+            messagebox.showwarning("Atención", "Debe preparar el entorno antes de analizar.")
+            return
+            
         self.current_n_population = 0
         if self.dict_pop_clean: self.process_population(auto_calc=False)
         if self.df_econ_raw is not None: 
             self.process_economic()
             self.process_calculations()
+            
+        # ¡AQUÍ APARECE EL BOTÓN VERDE!
+        self.btn_export.pack(side=tk.RIGHT, padx=10, pady=5)
 
     def _get_single_year_population(self, year):
         df_clean = self.dict_pop_clean[year]
@@ -486,7 +510,6 @@ class MainWindow:
         try:
             if hasattr(self, 'txt_calc_search'): self.txt_calc_search.delete(0, tk.END)
             
-            # --- EVALUACIÓN DE LA LEYENDA (Toma ambos datos de los desplegables) ---
             pop_year = getattr(self, 'active_pop_year', "")
             econ_year = self.cb_year_econ.get() if hasattr(self, 'cb_year_econ') and self.cb_year_econ.winfo_exists() else ""
             
@@ -497,9 +520,6 @@ class MainWindow:
                 if hasattr(self, 'lbl_calc_warning'):
                     self.lbl_calc_warning.config(text="")
             
-            # --- CORRECCIÓN DEL BUG DE ESTADO COMPLETO: AISLAR TERRITORIO ---
-            # La caché económica incluye estado y municipios, esto provocaba que se 
-            # sobreescribieran los datos en el diccionario al calcular clusters.
             df_target = self.df_econ_cache.copy()
             state_sel = self.cb_estado.get()
             mun_sel = self.cb_municipio.get()
@@ -507,20 +527,15 @@ class MainWindow:
             if "Toda la República" not in state_sel:
                 state_name = state_sel.replace("🟢 ", "").replace("⚪ ", "").split(" - ")[1].strip().upper()
                 if "Todos del Estado" in mun_sel:
-                    # Intentamos aislar la fila única del estado (si el INEGI la proporcionó)
                     df_target_state = df_target[df_target['Ubicación'].str.upper() == state_name]
                     if not df_target_state.empty:
                         df_target = df_target_state
                     else:
-                        # Si no existe, evitamos doble conteo sacando el estado, y dejamos
-                        # que el nuevo motor de Clusters sume el resto de los municipios automáticamente.
                         df_target = df_target[df_target['Ubicación'].str.upper() != state_name]
                 else:
-                    # Filtramos exclusivamente el municipio seleccionado
                     mun_name = mun_sel.split(" - ")[1].strip().upper()
                     df_target = df_target[df_target['Ubicación'].str.upper() == mun_name]
 
-            # Usar la N de la pestaña de población, garantizando que el usuario controla el año.
             n_final_cluster = self.current_n_population if self.current_n_population > 0 else 1.0
             
             self.df_calc_cache = calculate_clusters(df_target, n_final_cluster)
