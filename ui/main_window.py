@@ -28,7 +28,7 @@ class MainWindow:
         self.df_calc_cache = None 
         
         self.current_n_population = 0
-        self.active_pop_year = "" # Rastrea exactamente qué año de población se está usando
+        self.active_pop_year = "" 
         
         self.intersected_states = {}
         self.intersected_muns = {}
@@ -250,7 +250,6 @@ class MainWindow:
         self.lbl_pop_nature = tk.Label(row1_frame, text="Estado: -", font=("Arial", 10, "bold"))
         self.lbl_pop_nature.pack(side=tk.RIGHT, padx=15)
         
-        # Sincronización instantánea en cascada
         self.cb_view_mode.bind("<<ComboboxSelected>>", lambda e: self.process_population())
         self.cb_year_pop.bind("<<ComboboxSelected>>", lambda e: self.process_population())
 
@@ -293,7 +292,6 @@ class MainWindow:
         tk.Label(row1_frame, text="Año Censal Económico:").pack(side=tk.LEFT, padx=5)
         self.cb_year_econ = ttk.Combobox(row1_frame, state="readonly", width=8)
         self.cb_year_econ.pack(side=tk.LEFT, padx=5)
-        # Aquí también enlazamos la sincronización en cascada
         self.cb_year_econ.bind("<<ComboboxSelected>>", lambda e: self.process_all_tabs())
         
         tk.Label(row1_frame, text="Buscar:").pack(side=tk.LEFT, padx=10)
@@ -353,7 +351,6 @@ class MainWindow:
         self.chk_clusters_only = tk.Checkbutton(ctrl_frame, text="✅ Mostrar SOLAMENTE Clusters", variable=self.chk_clusters_only_var, font=("Arial", 9, "bold"), fg="green", command=self.filter_calc_realtime)
         self.chk_clusters_only.pack(side=tk.LEFT, padx=10)
         
-        # Alerta visual dinámica
         self.lbl_calc_warning = tk.Label(ctrl_frame, text="", font=("Arial", 9, "bold"), fg="#e67e22")
         self.lbl_calc_warning.pack(side=tk.LEFT, padx=15)
         
@@ -449,7 +446,6 @@ class MainWindow:
                         self.render_tree(self.tree_pop, df_real, type_tab='pop')
                         break
                         
-            # Si el usuario manipuló un control de población, auto-sincronizamos los Clusters
             if auto_calc and self.df_econ_raw is not None and self.calc_tab_built:
                 self.process_calculations()
                 
@@ -501,10 +497,33 @@ class MainWindow:
                 if hasattr(self, 'lbl_calc_warning'):
                     self.lbl_calc_warning.config(text="")
             
-            # Usar la N que extrajo exactamente del filtro de Población actual
+            # --- CORRECCIÓN DEL BUG DE ESTADO COMPLETO: AISLAR TERRITORIO ---
+            # La caché económica incluye estado y municipios, esto provocaba que se 
+            # sobreescribieran los datos en el diccionario al calcular clusters.
+            df_target = self.df_econ_cache.copy()
+            state_sel = self.cb_estado.get()
+            mun_sel = self.cb_municipio.get()
+
+            if "Toda la República" not in state_sel:
+                state_name = state_sel.replace("🟢 ", "").replace("⚪ ", "").split(" - ")[1].strip().upper()
+                if "Todos del Estado" in mun_sel:
+                    # Intentamos aislar la fila única del estado (si el INEGI la proporcionó)
+                    df_target_state = df_target[df_target['Ubicación'].str.upper() == state_name]
+                    if not df_target_state.empty:
+                        df_target = df_target_state
+                    else:
+                        # Si no existe, evitamos doble conteo sacando el estado, y dejamos
+                        # que el nuevo motor de Clusters sume el resto de los municipios automáticamente.
+                        df_target = df_target[df_target['Ubicación'].str.upper() != state_name]
+                else:
+                    # Filtramos exclusivamente el municipio seleccionado
+                    mun_name = mun_sel.split(" - ")[1].strip().upper()
+                    df_target = df_target[df_target['Ubicación'].str.upper() == mun_name]
+
+            # Usar la N de la pestaña de población, garantizando que el usuario controla el año.
             n_final_cluster = self.current_n_population if self.current_n_population > 0 else 1.0
             
-            self.df_calc_cache = calculate_clusters(self.df_econ_cache, n_final_cluster)
+            self.df_calc_cache = calculate_clusters(df_target, n_final_cluster)
             self.filter_calc_realtime()
             
         except Exception as e:
