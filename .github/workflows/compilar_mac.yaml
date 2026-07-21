@@ -1,0 +1,44 @@
+name: Compilar para macOS
+
+# Esto hace que el proceso arranque automáticamente cuando subas el código, 
+# o que puedas darle clic a un botón para iniciarlo manualmente.
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build_mac:
+    runs-on: macos-latest # ¡Aquí pedimos la Mac prestada!
+
+    steps:
+    - name: Descargar código del repositorio
+      uses: actions/checkout@v4
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12' # Puedes cambiarlo a tu versión
+
+    - name: Instalar librerías y PyInstaller
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
+
+    - name: Compilar la aplicación
+      run: |
+        pyinstaller --noconfirm --onedir --windowed --name "AnalisisCluster" main.py
+
+    - name: Comprimir la aplicación (.app) en un ZIP
+      # En Mac, un .app es en realidad una carpeta. 
+      # Hay que comprimirla en ZIP para que no se corrompa al descargarla.
+      run: |
+        cd dist
+        zip -r AnalisisCluster-Mac.zip "AnalisisCluster.app"
+
+    - name: Subir el archivo final para descarga
+      uses: actions/upload-artifact@v4
+      with:
+        name: AnalisisCluster-macOS
+        path: dist/AnalisisCluster-Mac.zip

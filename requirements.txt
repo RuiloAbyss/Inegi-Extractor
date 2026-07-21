@@ -3,3 +3,8 @@ openpyxl
 
 # Instala ejecutando este comando en la terminal  ->  
 # pip install -r requirements.txt
+
+
+# Empaquetar ejecutando este comando en la terminal  ->
+# python -m PyInstaller --onefile --noconsol
+# pyinstaller --noconfirm --onedir --windowed --name "AnalisisCluster" main.py PARA MAC
